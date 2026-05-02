@@ -1,5 +1,5 @@
 """
-NBA Injury Severity Labeling Pipeline
+NBA Injury Severity Labeling Pipeline 
 LIN 371 | Dhruv Kumar & Varun Ramanathan
 
 Severity is based on typical NBA recovery time:
