@@ -14,11 +14,11 @@ This repository/source-code folder reproduces the main results in the final repo
 
 The scripts expect the following input files in the same folder:
 
-- `nba_injuries_finalized.csv` for the labeling pipeline.
+- `nba_injuries_finalized.csv` for the labeling pipeline. This project used publicly available NBA injury data collected from Basketball Reference.
 - `nba_injuries_labeled.csv` after running `label_injuries.py`.
 - `split_train.csv`, `split_dev.csv`, and `split_test.csv` after running `split_data.py`.
 
-The submitted report uses 11,107 labeled injury records and a stratified 70/15/15 split:
+The submitted report uses 11,107 labeled injury records from Basketball Reference and a stratified 70/15/15 split:
 
 - Train: 7,774 records
 - Dev: 1,666 records
