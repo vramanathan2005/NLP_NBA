@@ -1,42 +1,32 @@
 """
-NBA Injury Severity Labeling Pipeline 
-LIN 371 | Dhruv Kumar & Varun Ramanathan
+severity based on typical NBA recovery time:
+  MINOR = days to ~1 week
+  MODERATE = ~1–6 weeks
+  SEVERE = 6+ weeks / season-ending / surgical
 
-Severity is based on typical NBA recovery time:
-  MINOR    = days to ~1 week  (back quickly, often day-to-day / DNP)
-  MODERATE = ~1–6 weeks       (missed games but not season-ending)
-  SEVERE   = 6+ weeks / season-ending / surgical
-
-Two-step classification:
+two-step classification:
   Step 1: Scan the 'notes' field with keyword matching
   Step 2: Fallback to 'injury_type' column for unmatched records
-  Omit:   Records where injury_type == 'injury' with no useful detail
+  Omit: Records where injury_type == 'injury' with no useful detail
 
-Modifiers applied AFTER base label:
+modifiers after base label:
   1. Return-timeline signals in notes override everything:
-       DTD / day-to-day / DNP → cap at MINOR
-       "out for season" / "out indefinitely" → floor at SEVERE
+       DTD / day-to-day / DNP = cap at MINOR
+       "out for season" / "out indefinitely" = floor at SEVERE
   2. Grade language (grade 1/2/3, partial, complete, mild) shifts ±1 step
   3. Body-part healing rate shifts borderline MODERATE ±1 step,
        but ONLY when no return-timeline signal is present
-
-Body-part healing rate reference:
-  Slow-healing (→ upgrade MODERATE to SEVERE):
-    Achilles, knee, hip, back, hamstring, quadricep
-  Fast-healing (→ downgrade MODERATE to MINOR):
-    Finger, thumb, toe, hand, wrist, nose
 """
 
 import re
 import pandas as pd
 
-# ── Return-timeline override signals ──────────────────────────────────────────
-# These appear in notes and anchor the label regardless of body part.
+#return-timeline override patterns
 
 MINOR_OVERRIDE_SIGNALS = [
     r"\bdtd\b", r"\bday[\s\-]to[\s\-]day\b",
-    r"\bdnp\b",                        # Did Not Play — short-term
-    r"\bcbc\b",                        # Come-Back Candidate — short-term
+    r"\bdnp\b", 
+    r"\bcbc\b", 
 ]
 
 SEVERE_OVERRIDE_SIGNALS = [
@@ -45,9 +35,7 @@ SEVERE_OVERRIDE_SIGNALS = [
     r"\bseason[\s\-]ending\b",
 ]
 
-# ── Base Keyword Lists ─────────────────────────────────────────────────────────
-# Multi-word phrases come BEFORE single words that are substrings of them.
-
+#base keyword lists for initial classification from notes
 SEVERE_KEYWORDS = [
     "acl tear", "acl", "achilles",
     "out for season", "out indefinitely",
@@ -96,8 +84,7 @@ MINOR_KEYWORDS = [
     "load management",
 ]
 
-# ── Fallback: injury_type column ───────────────────────────────────────────────
-
+#fallback injury_type lists for unmatched records
 SEVERE_INJURY_TYPES = {
     "acl tear", "achilles", "rupture", "dislocation",
     "surgery", "tear", "torn ligament",
@@ -114,10 +101,7 @@ MINOR_INJURY_TYPES = {
     "soreness", "tightness", "illness", "stiffness", "spasm", "fatigue",
 }
 
-# ── Grade modifier patterns ────────────────────────────────────────────────────
-# Upgrade → push score +1 (floor at SEVERE)
-# Downgrade → push score -1 (ceiling at MINOR)
-
+#grade modifier patterns
 GRADE_UPGRADE_PATTERNS = [
     r"\bgrade\s*3\b",
     r"\bcomplete\s+tear\b", r"\bcomplete\s+rupture\b",
@@ -132,11 +116,7 @@ GRADE_DOWNGRADE_PATTERNS = [
     r"\blow[\s\-]grade\b",
 ]
 
-# ── Body-part healing rate ─────────────────────────────────────────────────────
-# Only applied to MODERATE records with NO return-timeline override signal.
-# Slow-healing → MODERATE becomes SEVERE
-# Fast-healing → MODERATE becomes MINOR
-
+#body part healing moodifiers 
 SLOW_HEALING_PARTS = {
     "achilles", "knee", "acl", "pcl", "mcl", "lcl",
     "hip", "back", "spine", "hamstring", "quadricep", "quad",
@@ -148,8 +128,7 @@ FAST_HEALING_PARTS = {
 }
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
+#helper functions
 def _matches_any_keyword(text: str, keywords: list) -> bool:
     return any(kw in text for kw in keywords)
 
@@ -163,13 +142,13 @@ def _score_to_label(score: int) -> str:
     return ["MINOR", "MODERATE", "SEVERE"][max(0, min(2, score))]
 
 
-# ── Step 1: Classify from notes ────────────────────────────────────────────────
+#1. classify from notes 
 
 def classify_from_notes(notes: str) -> str | None:
     """
-    Scan notes for severity keywords.
-    Severe checked first so 'torn strain' → SEVERE, not MODERATE.
-    Returns 'MINOR', 'MODERATE', 'SEVERE', or None.
+    scan notes for severity keywords.
+    severe checked first so 'torn strain' = SEVERE, not MODERATE.
+    returns 'MINOR', 'MODERATE', 'SEVERE', or None.
     """
     if not isinstance(notes, str) or notes.strip() == "":
         return None
@@ -184,12 +163,11 @@ def classify_from_notes(notes: str) -> str | None:
     return None
 
 
-# ── Step 2: Fallback from injury_type ─────────────────────────────────────────
-
+ # 2. fallback classification from injury_type for unmatched records
 def classify_from_injury_type(injury_type: str) -> str | None:
     """
-    Fallback for unmatched records.
-    Generic 'injury' entries return None and will be omitted.
+    fallback for unmatched records.
+    generic 'injury' entries return None and will be omitted.
     """
     if not isinstance(injury_type, str):
         return None
@@ -205,25 +183,21 @@ def classify_from_injury_type(injury_type: str) -> str | None:
     return None
 
 
-# ── Modifier pipeline ──────────────────────────────────────────────────────────
-
+#modifier pipeline to adjust base labels
 def apply_modifiers(base_label: str, notes: str, body_part: str) -> str:
     """
-    Adjusts base_label in this order:
-
+    adjusts base_label in this order:
     1. Return-timeline override (highest priority):
-         DTD / day-to-day / DNP / CBC → cap label at MINOR
-         out for season / out indefinitely → floor label at SEVERE
+         DTD / day-to-day / DNP / CBC = cap label at MINOR
+         out for season / out indefinitely = floor label at SEVERE
        These anchor the label and skip the remaining modifiers.
-
     2. Grade language (grade 1/2/3, partial, complete):
-         grade 3 / complete → +1 step
-         grade 1 / mild / partial → -1 step
-
+         grade 3 / complete = +1 step
+         grade 1 / mild / partial = -1 step
     3. Body-part healing rate (only when no timeline signal present,
        only affects MODERATE):
-         slow-healing (knee, hamstring, back …) → MODERATE → SEVERE
-         fast-healing (finger, thumb, toe …)    → MODERATE → MINOR
+         slow-healing (knee, hamstring, back …) = MODERATE = SEVERE
+         fast-healing (finger, thumb, toe …)    = MODERATE = MINOR
     """
     if not isinstance(notes, str):
         notes = ""
@@ -233,7 +207,7 @@ def apply_modifiers(base_label: str, notes: str, body_part: str) -> str:
     text  = notes.lower()
     bpart = body_part.lower().strip()
 
-    # ── 1. Return-timeline overrides ──
+    # return timeline override signals trump all other modifiers
     has_minor_signal  = _matches_any_pattern(text, MINOR_OVERRIDE_SIGNALS)
     has_severe_signal = _matches_any_pattern(text, SEVERE_OVERRIDE_SIGNALS)
 
@@ -241,12 +215,10 @@ def apply_modifiers(base_label: str, notes: str, body_part: str) -> str:
         return "SEVERE"
 
     if has_minor_signal:
-        # DTD/DNP anchors to MINOR unless the base was already SEVERE from
-        # a torn/surgery/ACL keyword — those trump the timeline signal.
         if base_label != "SEVERE":
             return "MINOR"
 
-    # ── 2. Grade language ──
+    #2. grade language modifier
     score = _severity_score(base_label)
 
     if _matches_any_pattern(text, GRADE_UPGRADE_PATTERNS):
@@ -254,18 +226,17 @@ def apply_modifiers(base_label: str, notes: str, body_part: str) -> str:
     elif _matches_any_pattern(text, GRADE_DOWNGRADE_PATTERNS):
         score = max(score - 1, 0)
 
-    # ── 3. Body-part healing rate (MODERATE only, no timeline signal) ──
+    #3. body-part healing rate
     if score == 1 and not has_minor_signal:
         if bpart in SLOW_HEALING_PARTS:
-            score = 2   # MODERATE → SEVERE
+            score = 2   # MODERATE = SEVERE
         elif bpart in FAST_HEALING_PARTS:
-            score = 0   # MODERATE → MINOR
+            score = 0   # MODERATE = MINOR
 
     return _score_to_label(score)
 
 
-# ── Full row labeler ───────────────────────────────────────────────────────────
-
+# full row labeler
 def label_row(row) -> str | None:
     base = classify_from_notes(row["notes"])
     if base is None:
@@ -275,23 +246,22 @@ def label_row(row) -> str | None:
     return apply_modifiers(base, row["notes"], row["body_part"])
 
 
-# ── Main pipeline ──────────────────────────────────────────────────────────────
-
+# main pipeline function to run the labeling and save results
 def run_pipeline(input_path: str,
                  labeled_out: str,
                  omitted_out: str) -> None:
 
-    print(f"Loading data from: {input_path}")
+    print(f"loading data from: {input_path}")
     df = pd.read_csv(input_path)
-    print(f"  Total records loaded:        {len(df)}")
+    print(f"  total records loaded:        {len(df)}")
 
     df["severity"] = df.apply(label_row, axis=1)
 
     labeled_df = df[df["severity"].notna()].copy()
     omitted_df = df[df["severity"].isna()].copy()
 
-    print(f"  Records labeled:             {len(labeled_df)}")
-    print(f"  Records omitted (no label):  {len(omitted_df)}")
+    print(f"  records labeled:             {len(labeled_df)}")
+    print(f"  records omitted (no label):  {len(omitted_df)}")
 
     print("\nClass distribution:")
     counts = labeled_df["severity"].value_counts()
@@ -305,10 +275,6 @@ def run_pipeline(input_path: str,
     print(f"\nLabeled dataset saved to: {labeled_out}")
     print(f"Omitted records saved to: {omitted_out}")
 
-
-# ── Entry point ────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
     INPUT_PATH  = "nba_injuries_finalized.csv"
     LABELED_OUT = "nba_injuries_labeled.csv"
     OMITTED_OUT = "nba_injuries_omitted.csv"
